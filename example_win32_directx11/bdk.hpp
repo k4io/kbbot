@@ -3,6 +3,12 @@
 
 #include <chrono>
 
+#include <openssl/ssl.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
+
+#include <boost/algorithm/hex.hpp>
+
 #include <cpr/cpr.h>
 #include "json.hpp"
 
@@ -13,20 +19,34 @@ public:
 
     nlohmann::json getAccountInfo() {
         std::string endpoint = "/api/v3/account";
-        std::string timestamp = std::to_string(getTimestamp());
-        std::string signature = generateSignature("GET", endpoint, timestamp);
+        std::unordered_map<std::string, std::string> parameters;
 
-        auto response = cpr::Get(
-            cpr::Url{ base_url_ + endpoint },
-            cpr::Parameters{ {"timestamp", timestamp} },
-            cpr::Header{ {"X-MBX-APIKEY", api_key_}, {"signature", signature} }
-        );
+        //parameters.insert({
+        //    {"symbol", "BTCUSDT"},
+        //    {"interval", "1d"},
+        //    {"limit", "50"} });
+
+        const auto& response = sendSignedRequest("GET", endpoint, parameters);
 
         return nlohmann::json::parse(response.text);
     }
 
+    nlohmann::json getTradingPairInfo(const std::string& symbol, const std::string& timeInterval = "1h", int limit = 50) {
+        std::string endpoint = "/api/v3/klines";
+        std::unordered_map<std::string, std::string> parameters;
+
+        parameters.insert({
+			{"symbol", symbol},
+			{"interval", timeInterval},
+			{"limit", std::to_string(limit)} });
+
+        auto response = sendPublicRequest("GET", endpoint, parameters);
+
+		return nlohmann::json::parse(response.text);
+    }
+
 private:
-    const std::string base_url_ = "https://api.binance.com";
+    static inline std::string base_url_ = "https://api.binance.com";
     const std::string api_key_;
     const std::string secret_key_;
 
@@ -36,30 +56,95 @@ private:
         ).count();
     }
 
-    std::string generateSignature(const std::string& method, const std::string& endpoint, const std::string& timestamp) {
-        std::string query_string = "timestamp=" + timestamp;
-
-        std::string signature_payload = method + "\n" + endpoint + "\n" + query_string;
-
-        auto hash = hmac_sha256(secret_key_, signature_payload);
-        return hex_encode(hash.begin(), hash.end());
+    std::string generateSignature(const std::string& query) {
+        return hmac_sha256(this->secret_key_.c_str(), (char*)query.c_str());
     }
 
-    // HMAC-SHA256 function (You may need to implement this part)
-    std::vector<unsigned char> hmac_sha256(const std::string& key, const std::string& data) {
-        // Implement HMAC-SHA256 using your preferred library or method
-        // This is a placeholder, and you might need to replace it with a proper implementation
-        // Example: openssl, Crypto++ library, etc.
-        return {};
+    // Openssl HMAC-SHA256
+    std::string hmac_sha256(const char* key, char* data) {
+        unsigned char* result;
+        static char res_hexstring[64];
+        int result_len = 32;
+        std::string signature;
+
+        result = HMAC(EVP_sha256(), key, strlen((char*)key), const_cast<unsigned char*>(reinterpret_cast<const unsigned char*>(data)), strlen((char*)data), NULL, NULL);
+        for (int i = 0; i < result_len; i++) {
+            sprintf(&(res_hexstring[i * 2]), "%02x", result[i]);
+        }
+
+        for (int i = 0; i < 64; i++) {
+            signature += res_hexstring[i];
+        }
+
+        return signature;
     }
 
-    // Hex encoding function (You may need to implement this part)
-    template<typename InputIt>
-    std::string hex_encode(InputIt begin, InputIt end) {
-        // Implement hex encoding using your preferred method
-        // Example: Boost.Hex library, custom implementation, etc.
-        return {};
-    }
+    std::string joinQueryParams(const std::unordered_map<std::string, std::string>& params) {
+		std::string result;
+        for (auto& param : params) {
+			result += param.first + "=" + param.second + "&";
+		}
+		return result.substr(0, result.length() - 1);
+	}
+
+    cpr::Response sendSignedRequest(const std::string& httpMethod, const std::string& urlPath, std::unordered_map<std::string, std::string>& parameters) {
+        std::string url = this->base_url_ + urlPath + '?';
+        std::string queryString;
+        std::string timeStamp = "timestamp=" + std::to_string(getTimestamp());
+
+        if (!parameters.empty()) {
+            queryString = joinQueryParams(parameters) + "&" + timeStamp;
+            url += queryString;
+        }
+        else {
+            queryString = timeStamp;
+            url += queryString;
+        }
+
+        std::string signature = generateSignature(queryString);  // Replace with your actual API secret key
+        url += "&signature=" + signature;
+        queryString += "&signature=" + signature;
+
+        if (httpMethod == "POST") {
+            auto response = cpr::Post(
+                cpr::Url{ url },
+                cpr::Header{ {"X-MBX-APIKEY", this->api_key_} }
+            );
+            return response;
+        }
+        else if (httpMethod == "GET") {
+            auto response = cpr::Get(
+                cpr::Url{ url },
+                cpr::Header{ {"X-MBX-APIKEY", this->api_key_} }
+            );
+            return response;
+        }
+        else throw new std::exception("Http method not implemented!");
+	}
+
+    cpr::Response sendPublicRequest(const std::string& httpMethod, const std::string& urlPath, std::unordered_map<std::string, std::string>& parameters) {
+		std::string url = this->base_url_ + urlPath + '?';
+		std::string queryString;
+
+        if (!parameters.empty()) {
+			queryString = joinQueryParams(parameters);
+			url += queryString;
+		}
+
+        if (httpMethod == "POST") {
+            auto response = cpr::Post(
+				cpr::Url{ url }
+			);
+			return response;
+		}
+        else if (httpMethod == "GET") {
+            auto response = cpr::Get(
+				cpr::Url{ url }
+			);
+			return response;
+		}
+		else throw new std::exception("Http method not implemented!");
+	}
 };
 
 #endif

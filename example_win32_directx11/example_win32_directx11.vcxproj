@@ -82,8 +82,8 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(ProjectDir)$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)$(Configuration)\</IntDir>
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(DXSDK_DIR)Include;C:\Users\kai\Documents\binance bot\pe\freetype\include;C:\cpr-1.10.5\include;C:\curl-8.6.0\include</IncludePath>
-    <LibraryPath>C:\Users\kai\Documents\binance bot\pe\SDK\Include;C:\Users\kai\Documents\binance bot\pe\freetype\win64;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);$(DXSDK_DIR)Include;C:\Users\kai\Documents\binance bot\pe\freetype\include;$(VCPKG_INSTALLATION_ROOT)/include</IncludePath>
+    <LibraryPath>C:\Users\kai\Documents\binance bot\pe\SDK\Include;C:\Users\kai\Documents\binance bot\pe\freetype\win64;$(VCPKG_INSTALLATION_ROOT)/lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

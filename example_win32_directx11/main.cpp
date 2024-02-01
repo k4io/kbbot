@@ -16,6 +16,7 @@
 #include "util.hpp"
 #include <string>
 #include <Windows.h>
+#include <thread>
 #include <iostream>
 
 #include <codecvt>
@@ -48,6 +49,8 @@ namespace image
     ID3D11ShaderResourceView* cog = nullptr;
     ID3D11ShaderResourceView* close = nullptr;
 
+    ID3D11ShaderResourceView* linked = nullptr;
+    ID3D11ShaderResourceView* unlinked = nullptr;
 }
 
 namespace font
@@ -187,22 +190,133 @@ void PlotCandlestick(const char* label_id, const double* xs, const double* opens
             draw_list->AddLine(low_pos, high_pos, color);
             draw_list->AddRectFilled(open_pos, close_pos, color);
         }
-
         // end plot item
         ImPlot::EndItem();
     }
 }
 
+static std::vector<double> g_vdDates{};
+static std::vector<double> g_vdOpens{};
+static std::vector<double> g_vdCloses{};
+static std::vector<double> g_vdLows{};
+static std::vector<double> g_vdHighs{};
+
+void UpdateChartVectors() {
+    /*\
+    * example data
+    [
+        1706796000000, //open time
+        "42219.61000000", // open
+        "42657.48000000", // high
+        "42186.00000000", // low
+        "42651.10000000", // close
+        "2229.76128000", // volume
+        1706799599999, // close time
+        "94655481.18064480", // quote asset volume
+        110160, // number of trades
+        "1262.90750000", // taker buy base asset volume
+        "53616609.99320370", // taker buy quote asset volume
+        "0" // ignore
+    ],
+    [
+        1706799600000,
+        "42651.10000000",
+        "42871.10000000",
+        "42580.00000000",
+        "42836.87000000",
+        "1578.61738000",
+        1706803199999,
+        "67458218.66503330",
+        78724,
+        "756.99357000",
+        "32347588.44046990",
+        "0"
+    ]
+]                           
+    */
+
+    do {
+        std::vector<double> dates{};
+        std::vector<double> opens{};
+        std::vector<double> closes{};
+        std::vector<double> lows{};
+        std::vector<double> highs{};
+
+        nlohmann::json jsondata;
+
+        std::string time_interval;
+        switch (g_pUtil->m_settings.m_iChartInterval)
+		{
+        case 0: //15m
+			time_interval = "15m";
+			break;
+        case 1: //1hr
+			time_interval = "1h";
+			break;
+        case 2: //1day
+			time_interval = "1d";
+			break;
+        }
+
+        switch (g_pUtil->m_settings.m_iTradingPair)
+        {
+        case 0: // usdt/btc
+            jsondata = g_pUtil->binance->getTradingPairInfo("BTCUSDT", time_interval);
+            break;
+        case 1: // usdt/ltc
+            jsondata = g_pUtil->binance->getTradingPairInfo("LTCUSDT", time_interval);
+            break;
+        case 2: // usdt/ada
+            jsondata = g_pUtil->binance->getTradingPairInfo("ADAUSDT", time_interval);
+            break;
+        case 3: // usdt/eth
+            jsondata = g_pUtil->binance->getTradingPairInfo("ETHUSDT", time_interval);
+            break;
+        default:
+            continue;
+        }
+
+        //auto s = jsondata.dump(4);
+        //printf("%s\n", s.c_str());
+
+        for (int i = 0; i < jsondata.size(); i++) {
+            auto date = jsondata[i][0].get<double>();
+            dates.push_back(date);
+
+            auto open = jsondata[i][1].get<std::string>();
+            opens.push_back(std::stod(open));
+
+            const auto& high = jsondata[i][2].get<std::string>();
+            highs.push_back(std::stod(high));
+
+            const auto& low = jsondata[i][3].get<std::string>();
+            lows.push_back(std::stod(low));
+
+            const auto& close = jsondata[i][4].get<std::string>();
+            closes.push_back(std::stod(close));
+        }
+
+        g_vdDates = dates;
+        g_vdOpens = opens;
+        g_vdCloses = closes;
+        g_vdLows = lows;
+        g_vdHighs = highs;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+        //return;
+    } while (1);
+}
 
 int main(int, char**)
 {
-    static int i_screen_x = GetSystemMetrics(SM_CXSCREEN);
-    static int i_screen_y = GetSystemMetrics(SM_CYSCREEN);
+    static int l_iScreenX = GetSystemMetrics(SM_CXSCREEN);
+    static int l_iScreenY = GetSystemMetrics(SM_CYSCREEN);
     if (!GetAsyncKeyState(VK_LSHIFT))
         ShowWindow(GetConsoleWindow(), SW_HIDE);
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, /*LoadCursor(NULL, IDC_ARROW)*/ LoadCursor(0, IDC_ARROW), nullptr, nullptr, L"kbbot", nullptr };
     ::RegisterClassExW(&wc);
-    HWND hwnd = ::CreateWindowEx(WS_EX_LAYERED, wc.lpszClassName, L"kbbot", WS_POPUP, 0, 0, i_screen_x, i_screen_y, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = ::CreateWindowEx(WS_EX_LAYERED, wc.lpszClassName, L"kbbot", WS_POPUP, 0, 0, l_iScreenX, l_iScreenY, nullptr, nullptr, wc.hInstance, nullptr);
     SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, ULW_COLORKEY);
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
@@ -249,6 +363,9 @@ int main(int, char**)
     if (image::pistol == nullptr) D3DX11CreateShaderResourceViewFromMemory(g_pd3dDevice, pistol_icon, sizeof(pistol_icon), &info, pump, &image::pistol, 0);
     if (image::cog == nullptr) D3DX11CreateShaderResourceViewFromMemory(g_pd3dDevice, cog_icon, sizeof(cog_icon), &info, pump, &image::cog, 0);
     if (image::close == nullptr) D3DX11CreateShaderResourceViewFromMemory(g_pd3dDevice, closebutton , sizeof(closebutton), &info, pump, &image::close, 0);
+
+    if (image::linked == nullptr) D3DX11CreateShaderResourceViewFromMemory(g_pd3dDevice, link, sizeof(link), &info, pump, &image::linked, 0);
+    if (image::unlinked == nullptr) D3DX11CreateShaderResourceViewFromMemory(g_pd3dDevice, zunlink, sizeof(zunlink), &info, pump, &image::unlinked, 0);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
@@ -304,7 +421,7 @@ int main(int, char**)
 
             im::SetNextWindowSizeConstraints(ImVec2(c::bg::size.x, c::bg::size.y), im::GetIO().DisplaySize);
 
-            im::Begin("##kbbot", nullptr, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBringToFrontOnFocus);
+            im::Begin("##kbbot", nullptr, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             {
                 const ImVec2& pos = im::GetWindowPos();
                 const ImVec2& region = im::GetContentRegionMax();
@@ -327,7 +444,7 @@ int main(int, char**)
 
                 if (im::ImageButton(image::close, ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1))) {
                     done = true;
-				}
+                }
 
                 im::GetWindowDrawList()->AddImage(image::logo_cheat, pos + ImVec2(region.x - style.ItemSpacing.x - (style.ItemSpacing.x / 2) - 200, 0) + style.ItemSpacing + ImVec2(20, 20), pos + ImVec2(region.x - 100 - style.ItemSpacing.x - style.ItemSpacing.x / 2, 100) - ImVec2(20, 20), ImVec2(0, 0), ImVec2(1, 1), im::GetColorU32(c::accent_color));
 
@@ -336,10 +453,10 @@ int main(int, char**)
                 im::SetCursorPos(ImVec2(style.ItemSpacing.x + 30, style.ItemSpacing.y));
                 im::BeginGroup();
                 {
-                        if (im::Tab(1, 0 == page, image::cog, ImVec2(30, 85))) page = 0;
-                        im::SameLine(0, 35);
-                        if (im::Tab(2, 1 == page, image::eye, ImVec2(30, 85))) page = 1;
-                        im::SameLine(0, 35);
+                    if (im::Tab(1, 0 == page, image::cog, ImVec2(30, 85))) page = 0;
+                    im::SameLine(0, 35);
+                    if (im::Tab(2, 1 == page, image::eye, ImVec2(30, 85))) page = 1;
+                    im::SameLine(0, 35);
                 }
                 im::EndGroup();
 
@@ -357,8 +474,9 @@ int main(int, char**)
                 if (active_tab == 0) {
                     im::BeginGroup();
                     {
-                        im::BeginChild("SETTINGS", ImVec2(region.x / 3 - style.ItemSpacing.x - (style.ItemSpacing.x / 3), region.y - (90 + style.ItemSpacing.y * 3)));
+                        im::BeginChild("SETTINGS", ImVec2(region.x / 3 - style.ItemSpacing.x - (style.ItemSpacing.x / 3), region.y - (90 + style.ItemSpacing.y * 3)), 0, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
                         {
+                            im::GetStyle().ItemSpacing = ImVec2(10, 10);
                             if (im::Button(g_pUtil->m_bIsTrading ? "Force-stop" : "Start buy-in", ImVec2(im::GetContentRegionMax().x - style.WindowPadding.x, 25)))
                                 g_pUtil->m_bIsTrading = !g_pUtil->m_bIsTrading;
 
@@ -368,7 +486,7 @@ int main(int, char**)
                             im::SliderFloat("Minimum profit", &g_pUtil->m_settings.m_fMinimumProfitMargin, 5.f, 500.f, "$%.0f");
                             //im::InputTextWithHint("Input buy-in", "Buy-in price..", input, 64, NULL);
                             im::Combo("Trading pair", &g_pUtil->m_settings.m_iTradingPair, "USDT/BTC\000USDT/LTC\000USDT/ADA\000USDT/ETH");
-
+                            im::Combo("Chart intervals", &g_pUtil->m_settings.m_iTradingPair, "15m\0001hr\0001d");
                             im::Checkbox("Chart tooltip", &g_pUtil->m_settings.m_bChartTooltip);
                             im::ColorEdit4("Accent color", accentcol, picker_flags);
                             im::ColorEdit4("High color", g_pUtil->m_settings.m_fHighColor, picker_flags);
@@ -387,14 +505,13 @@ int main(int, char**)
                         im::EndChild();
                     }
                     im::EndGroup();
-
+                    im::GetStyle().ItemSpacing = ImVec2(10, 10);
                     im::SameLine();
-
                     im::BeginGroup();
                     {
                         im::BeginChild("OUTPUT", ImVec2(region.x / 1.5f - style.ItemSpacing.x - (style.ItemSpacing.x / 1.5f), region.y - (90 + style.ItemSpacing.y * 3)));
                         {
-                            im::BeginChild("", ImVec2(im::GetContentRegionMax().x - style.WindowPadding.x, im::GetContentRegionMax().y / 2.1f - style.WindowPadding.y / 2.1f), false, ImGuiWindowFlags_HorizontalScrollbar);
+                            im::BeginChild("LOG", ImVec2(im::GetContentRegionMax().x - style.WindowPadding.x, im::GetContentRegionMax().y / 2.1f - style.WindowPadding.y / 2.1f), false, ImGuiWindowFlags_HorizontalScrollbar);
                             {
                                 im::SetCursorPosY(im::GetCursorPosY() - 10);
 
@@ -404,128 +521,203 @@ int main(int, char**)
                                     char buffer[80];
                                     strftime(buffer, 80, "%d.%m.%Y %H:%M:%S", timePtr);
                                     return buffer;
-                                };
+                                    };
 
+                                im::GetStyle().ItemSpacing.y = 5;
                                 for (int i = 0; i < logs.size(); i++) {
                                     im::TextColored(c::text::text_active, (std::string("[") + std::string(TimeFromStamp(logs[i].timestamp)) + std::string("] ") + logs[i].message).c_str());
-								}
-							}
+                                }
+
+                                im::GetStyle().ItemSpacing.y = 10;
+                            }
                             im::EndChild();
-                            im::BeginChild(" ", ImVec2(im::GetContentRegionMax().x - style.WindowPadding.x, im::GetContentRegionMax().y / 2.1f - style.WindowPadding.y / 2.1f), false, ImGuiWindowFlags_NoScrollbar);
+
+                            const auto& image_min = pos + ImVec2(region.x - style.ItemSpacing.x - (style.ItemSpacing.x / 2) - 75, 0) + style.ItemSpacing + ImVec2(20, 105);
+                            const auto& image_max = image_min + ImVec2(30, 30);
+                            if (g_pUtil->m_bIsConnected) {
+                                im::GetForegroundDrawList()->AddImage(image::linked, image_min, image_max, ImVec2(0, 0), ImVec2(1, 1), im::GetColorU32({ 1, 1, 1, 1 }));
+                            } else {
+                                im::GetForegroundDrawList()->AddImage(image::unlinked, image_min, image_max, ImVec2(0, 0), ImVec2(1, 1), im::GetColorU32({ 1, 1, 1, 1 }));
+                            }
+
+                            auto tb4 = im::GetStyle().FramePadding;
+                            im::GetStyle().FramePadding = ImVec2(5, 5);
+
+                            im::BeginChild("CHART", ImVec2(im::GetContentRegionMax().x - style.WindowPadding.x, im::GetContentRegionMax().y / 2.1f - style.WindowPadding.y / 2.1f), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
                             {
-                                double dates[] = {
-                                    1546300800, 1546387200, 1546473600, 1546560000, 1546819200, 1546905600, 1546992000, 1547078400, 1547164800, 1547424000,
-                                    1547510400, 1547596800, 1547683200, 1547769600, 1547942400, 1548028800, 1548115200, 1548201600, 1548288000, 1548374400,
-                                    1548633600, 1548720000, 1548806400, 1548892800, 1548979200, 1549238400, 1549324800, 1549411200, 1549497600, 1549584000,
-                                    1549843200, 1549929600, 1550016000, 1550102400, 1550188800, 1550361600, 1550448000, 1550534400, 1550620800, 1550707200,
-                                    1550793600, 1551052800, 1551139200, 1551225600, 1551312000, 1551398400, 1551657600, 1551744000, 1551830400, 1551916800
-                                };
+                                static bool g_bChartUpdateThreadCreated = false;
+                                if (!g_bChartUpdateThreadCreated) {
+                                    CreateThread(0,0,(LPTHREAD_START_ROUTINE)UpdateChartVectors,0,0,0);
+                                    g_bChartUpdateThreadCreated = true;
+                                }
 
-                                double opens[] = {
-                                    1284.7, 1319.9, 1318.7, 1328, 1317.6, 1321.6, 1314.3, 1325, 1319.3, 1323.1,
-                                    1324.7, 1321.3, 1323.5, 1322, 1281.3, 1281.95, 1311.1, 1315, 1314, 1313.1,
-                                    1331.9, 1334.2, 1341.3, 1350.6, 1349.8, 1346.4, 1343.4, 1344.9, 1335.6, 1337.9,
-                                    1342.5, 1337, 1338.6, 1337, 1340.4, 1324.65, 1324.35, 1349.5, 1371.3, 1367.9,
-                                    1351.3, 1357.8, 1356.1, 1356, 1347.6, 1339.1, 1320.6, 1311.8, 1314, 1312.4
-                                };
+                                const ImVec4 bullCol = ImVec4(g_pUtil->m_settings.m_fHighColor[0], g_pUtil->m_settings.m_fHighColor[1], g_pUtil->m_settings.m_fHighColor[2], 1.000f);
+                                const ImVec4 bearCol = ImVec4(g_pUtil->m_settings.m_fLowColor[0], g_pUtil->m_settings.m_fLowColor[1], g_pUtil->m_settings.m_fLowColor[2], 1.000f);
 
-                                double highs[] = {
-                                    1284.75, 1320.6, 1327, 1330.8, 1326.8, 1321.6, 1326, 1328, 1325.8, 1327.1,
-                                    1326, 1326, 1323.5, 1322.1, 1282.7, 1282.95, 1315.8, 1316.3, 1314, 1333.2,
-                                    1334.7, 1341.7, 1353.2, 1354.6, 1352.2, 1346.4, 1345.7, 1344.9, 1340.7, 1344.2,
-                                    1342.7, 1342.1, 1345.2, 1342, 1350, 1324.95, 1330.75, 1369.6, 1374.3, 1368.4,
-                                    1359.8, 1359, 1357, 1356, 1353.4, 1340.6, 1322.3, 1314.1, 1316.1, 1312.9
-                                };
-
-                                double lows[] = {
-                                    1282.85, 1315, 1318.7, 1309.6, 1317.6, 1312.9, 1312.4, 1319.1, 1319, 1321,
-                                    1318.1, 1321.3, 1319.9, 1312, 1280.5, 1276.15, 1308, 1309.9, 1308.5, 1312.3,
-                                    1329.3, 1333.1, 1340.2, 1347, 1345.9, 1338, 1340.8, 1335, 1332, 1337.9, 1333,
-                                    1336.8, 1333.2, 1329.9, 1340.4, 1323.85, 1324.05, 1349, 1366.3, 1351.2, 1349.1,
-                                    1352.4, 1350.7, 1344.3, 1338.9, 1316.3, 1308.4, 1306.9, 1309.6, 1306.7, 1312.3
-                                };
-
-                                double closes[] = {
-                                    1283.35, 1315.3, 1326.1, 1317.4, 1321.5, 1317.4, 1323.5, 1319.2, 1321.3, 1323.3,
-                                    1319.7, 1325.1, 1323.6, 1313.8, 1282.05, 1279.05, 1314.2, 1315.2, 1310.8, 1329.1,
-                                    1334.5, 1340.2, 1340.5, 1350, 1347.1, 1344.3, 1344.6, 1339.7, 1339.4, 1343.7,
-                                    1337, 1338.9, 1340.1, 1338.7, 1346.8, 1324.25, 1329.55, 1369.6, 1372.5, 1352.4,
-                                    1357.6, 1354.2, 1353.4, 1346, 1341, 1323.8, 1311.9, 1309.1, 1312.2, 1310.7
-                                };
-
-                                static ImVec4 bullCol = ImVec4(g_pUtil->m_settings.m_fHighColor[0], g_pUtil->m_settings.m_fHighColor[1], g_pUtil->m_settings.m_fHighColor[2], 1.000f);
-                                static ImVec4 bearCol = ImVec4(g_pUtil->m_settings.m_fLowColor[0], g_pUtil->m_settings.m_fLowColor[1], g_pUtil->m_settings.m_fLowColor[2], 1.000f);
                                 ImPlot::GetStyle().UseLocalTime = false;
+                                ImPlot::GetStyle().Use24HourClock = true;
+                                ImPlot::GetStyle().LineWeight = 2.f;
+                                ImPlot::GetStyle().MarkerWeight = 2.f;
 
-                                im::SetCursorPosX(im::GetCursorPosX() - 100);
-                                im::SetCursorPosY(im::GetCursorPosY() - 50);
+                                im::SetCursorPosX(im::GetCursorPosX() - 20);
+                                im::SetCursorPosY(im::GetCursorPosY() - 25);
 
                                 im::PushStyleColor(ImGuiCol_PopupBg, c::child::background);
                                 im::PushStyleColor(ImGuiCol_Text, c::text::text);
                                 im::PushStyleColor(ImPlotCol_Crosshairs, c::accent_color);
 
+                                im::PushStyleColor(ImPlotCol_AxisText, c::text::text_active);
+                                im::PushStyleColor(ImPlotCol_LegendText, c::text::text_active);
+                                im::PushStyleColor(ImPlotCol_TitleText, c::text::text_active);
+
+
                                 const auto& region = im::GetContentRegionMax();
 
-                                if (ImPlot::BeginPlot("Candlestick Chart", ImVec2(region.x * 1.3f, region.y + 70))) {
+                                if (g_vdDates.size() > 49 && ImPlot::BeginPlot("###PRICEAS", ImVec2(region.x * 1.f, region.y + 70), ImPlotFlags_NoLegend)) {
                                     std::string y_axis_title = "Price";
                                     switch (g_pUtil->m_settings.m_iTradingPair) {
-										case 0:
-											y_axis_title = "USDT/BTC";
-											break;
-										case 1:
-                                            y_axis_title = "USDT/LTC";
-											break;
-                                        case 2:
-											y_axis_title = "USDT/ADA";
-                                            break;
-										case 3:
-                                            y_axis_title = "USDT/ETH";
-											break;
-									}
-                                    ImPlot::SetupAxes("", y_axis_title.c_str(), 0, ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit);
-                                    ImPlot::SetupAxesLimits(1546300800, 1551916800, 1250, 1600);
+                                    case 0:
+                                        y_axis_title = "USDT/BTC";
+                                        break;
+                                    case 1:
+                                        y_axis_title = "USDT/LTC";
+                                        break;
+                                    case 2:
+                                        y_axis_title = "USDT/ADA";
+                                        break;
+                                    case 3:
+                                        y_axis_title = "USDT/ETH";
+                                        break;
+                                    }
+
+                                    ImPlot::SetupAxes(nullptr, y_axis_title.c_str(), 0, ImPlotAxisFlags_AutoFit | ImPlotAxisFlags_RangeFit);
+
+                                    const double x_axis_begin = g_vdDates[0];
+                                    const double x_axis_limit = g_vdDates[g_vdDates.size() - 1];
+
+                                    const double y_axis_begin = (*std::min_element(g_vdLows.begin(), g_vdLows.end())) - 5000.0;
+                                    const double y_axis_limit = (*std::max_element(g_vdHighs.begin(), g_vdHighs.end())) + 5000.0;
+
+                                    ImPlot::SetupAxesLimits(x_axis_begin, x_axis_limit, y_axis_begin, y_axis_limit);
                                     ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Time);
-                                    ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, 1546300800, 1551916800);
-                                    ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 60 * 60 * 24 * 14, 1571961600 - 1546300800);
-                                    ImPlot::SetupAxisFormat(ImAxis_Y1, "$%.0f");
-                                    PlotCandlestick(y_axis_title.c_str(), dates, opens, closes, lows, highs, 50, g_pUtil->m_settings.m_bChartTooltip, .5f, bullCol, bearCol);
+                                    ImPlot::SetupAxisLimitsConstraints(ImAxis_X1, x_axis_begin, x_axis_limit);
+                                    ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 60 * 60 * 24 * 14, x_axis_limit - ((x_axis_begin - x_axis_limit) * .25f));
+                                    ImPlot::SetupAxisFormat(ImAxis_X1, (char*)nullptr);
+                                    ImPlot::SetupAxisFormat(ImAxis_Y1, "$%.2f");
+
+                                    ImPlot::SetupFinish();
+
+                                    double dates[51] = { 0 };
+                                    double opens[51] = { 0 };
+                                    double closes[51] = { 0 };
+                                    double lows[51] = { 0 };
+                                    double highs[51] = { 0 };
+
+                                    for (int i = 0; i < 50; i++) {
+										dates[i] = g_vdDates[i];
+										opens[i] = g_vdOpens[i];
+										closes[i] = g_vdCloses[i];
+										lows[i] = g_vdLows[i];
+										highs[i] = g_vdHighs[i];
+									}
+
+                                    PlotCandlestick(y_axis_title.c_str(), dates, opens, closes, lows, highs, 51, g_pUtil->m_settings.m_bChartTooltip, .35f, bullCol, bearCol);
                                     ImPlot::EndPlot();
                                 }
 
                                 im::PopStyleColor();
                                 im::PopStyleColor();
                                 im::PopStyleColor();
-							}
+                                im::PopStyleColor();
+                                im::PopStyleColor();
+                                im::PopStyleColor();
+                            }
                             im::EndChild();
+
+                            im::GetStyle().FramePadding = tb4;
                         }
                         im::EndChild();
                     }
                     im::EndGroup();
                 }
                 else if (active_tab == 1) {
-                        im::BeginGroup();
+                    im::BeginGroup();
+                    {
+                        im::BeginChild("ACCOUNT", ImVec2(region.x / 2.f - style.ItemSpacing.x - (style.ItemSpacing.x / 2.f), region.y - (90 + style.ItemSpacing.y * 3)));
                         {
-                            im::BeginChild("ACCOUNT", ImVec2(region.x / 2.f - style.ItemSpacing.x - (style.ItemSpacing.x / 2.f), region.y - (90 + style.ItemSpacing.y * 3)));
-                            {
-                                im::InputTextWithHint("API-key", "API-key..", g_pUtil->m_settings.m_cApiKey, 256, NULL);
-                                im::InputTextWithHint("Secret-key", "Secret-key..", g_pUtil->m_settings.m_cSecretKey, 256, NULL);
+                            im::InputTextWithHint("API-key", "API-key..", g_pUtil->m_settings.m_cApiKey, 256, NULL);
+                            im::InputTextWithHint("Secret-key", "Secret-key..", g_pUtil->m_settings.m_cSecretKey, 256, NULL);
+                            if (im::Button("Check keys", ImVec2(im::GetContentRegionMax().x / 2 - style.WindowPadding.x, 25))) {
+                                const auto& account_code = g_pUtil->CheckBinanceKeys();
+                                if (account_code) {
+                                    MessageBoxA(0, "Successfully connected to Binance!", "Success", MB_OK | MB_ICONINFORMATION);
+
+                                    g_pUtil->m_bIsConnected = true;
+                                } else {
+                                    char buffer[64];
+                                    sprintf(buffer, "Failed to connect to Binance! Error code: %d", account_code);
+                                    MessageBoxA(0, buffer, "Error", MB_OK | MB_ICONERROR);
+                                }
                             }
-                            im::EndChild();
                         }
-                        im::EndGroup();
-
-                        im::SameLine();
-
-                        im::BeginGroup();
-                        {
-                            im::BeginChild("HELP", ImVec2(region.x / 2.f - style.ItemSpacing.x - (style.ItemSpacing.x / 2.f), region.y - (90 + style.ItemSpacing.y * 3)));
-                            {
-
-                            }
-                            im::EndChild();
-                        }
-                        im::EndGroup();
+                        im::EndChild();
                     }
+                    im::EndGroup();
+
+                    im::SameLine();
+
+                    im::BeginGroup();
+                    {
+                        im::BeginChild("HELP", ImVec2(region.x / 2.f - style.ItemSpacing.x - (style.ItemSpacing.x / 2.f), region.y - (90 + style.ItemSpacing.y * 3)));
+                        {
+
+                        }
+                        im::EndChild();
+                    }
+                    im::EndGroup();
+                }
+
+
+                static bool g_bStarted = false;
+
+
+                if (g_pUtil->m_bIsTrading) {
+                    std::string apikey = g_pUtil->m_settings.m_cApiKey;
+                    std::string secretkey = g_pUtil->m_settings.m_cSecretKey;
+
+                    if (apikey.empty()) {
+                        logs.push_back({ (int)time(0), "API-key is empty!" });
+                        g_pUtil->m_bIsTrading = false;
+                    }
+                    else if (secretkey.empty()) {
+                        logs.push_back({ (int)time(0), "Secret key is empty!" });
+                        g_pUtil->m_bIsTrading = false;
+                    }
+                    else if (!g_bStarted) {
+                        logs.push_back({ (int)time(0), "Starting binance bot..." });
+						g_bStarted = true;
+                        logs.push_back({ (int)time(0), "Checking keys..." });
+
+                        const auto& result = g_pUtil->CheckBinanceKeys();
+
+                        if (result) {
+                            logs.push_back({ (int)time(0), "Keys confirmed valid!" });
+                            g_pUtil->m_bIsConnected = true;
+                        }
+                        else {
+                            char buffer[128];
+                            sprintf(buffer, "Failed to connect to Binance! Error code: %d", result);
+                            logs.push_back({ (int)time(0), buffer });
+							g_pUtil->m_bIsTrading = false;
+                        }
+                    }
+                }
+                else if (g_bStarted) {
+					logs.push_back({ (int)time(0), "Stopping binance bot..." });
+					g_bStarted = false;
+                    g_pUtil->m_bIsConnected = false;
+				}
+
 
                 im::PopStyleVar();
 
